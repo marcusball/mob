@@ -10,6 +10,14 @@ use mio::tcp::*;
 
 use server::Server;
 
+enum MessageType{
+    Login { name_len: u32 },
+    Logout,
+    Message { name_len: u32, msg_len: u32 },
+    List
+}
+
+
 /// A stateful wrapper around a non-blocking stream. This connection is not
 /// the SERVER connection. This connection represents the client connections
 /// _accepted_ by the SERVER connection.
@@ -39,6 +47,9 @@ pub struct Connection {
     // track whether a write received `WouldBlock`
     write_continuation: bool,
 
+    // The name of the user associated with this connection
+    pub username: String
+
 }
 
 impl Connection {
@@ -52,6 +63,7 @@ impl Connection {
             is_reset: false,
             read_continuation: None,
             write_continuation: false,
+            username: String::new()
         }
     }
 
@@ -107,6 +119,49 @@ impl Connection {
                 Err(e)
             }
         }
+    }
+
+    fn read_message_info(&mut self) -> io::Result<Option<MessageType>>{
+        let mut buf = [0u8; 12];
+
+        let bytes = match self.sock.try_read(&mut buf){
+            Ok(None) =>{
+                return Ok(None);
+            },
+            Ok(Some(n)) => n,
+            Err(e) => {
+                return Err(e);
+            }
+        };
+
+        if bytes < 8{
+            warn!("Found message length of {} bytes", bytes);
+            return Err(Error::new(ErrorKind::InvalidData, "Invalid message length"));
+        }
+
+        debug!("Received: {:?}", buf);
+
+        let command = LittleEndian::read_u32(buf[0..4].as_ref());
+        debug!("Command number is {}", command);
+
+        let name_len = LittleEndian::read_u32(buf[4..8].as_ref());
+        debug!("Name length is {}", name_len);
+
+        let msg_len = LittleEndian::read_u32(buf[8..12].as_ref());
+        debug!("message length is {}", msg_len);
+
+        //let msg_len = (12 + name_len + msg_len) as u64;
+
+        match command{
+            0 => { return Ok(Some(MessageType::Login{ name_len: name_len })); },
+            1 => { return Ok(Some(MessageType::Logout)); },
+            2 => { return Ok(Some(MessageType::Message{ name_len: name_len, msg_len: msg_len })); },
+            3 => { return Ok(Some(MessageType::List)); },
+            n => {
+                warn!("Received invalid message type, {}!", n);
+                return Err(Error::new(ErrorKind::InvalidData, "Invalid message type received"));
+            }
+        };
     }
 
     fn read_message_length(&mut self) -> io::Result<Option<u64>> {

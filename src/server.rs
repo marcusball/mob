@@ -104,7 +104,7 @@ impl Handler for Server {
                 self.readable(token)
                     .unwrap_or_else(|e| {
                         warn!("Read event failed for {:?}: {:?}", token, e);
-                        self.find_connection_by_token(token).mark_reset();
+                        //self.find_connection_by_token(token).mark_reset();
                     });
             }
         }

@@ -3,7 +3,7 @@ use std::io::prelude::*;
 use std::io::{Error, ErrorKind};
 use std::rc::Rc;
 
-use byteorder::{ByteOrder, BigEndian};
+use byteorder::{ByteOrder, BigEndian, LittleEndian};
 
 use mio::*;
 use mio::tcp::*;
@@ -92,6 +92,8 @@ impl Connection {
             Ok(Some(n)) => {
                 debug!("CONN : we read {} bytes", n);
 
+                debug!("Data: {:?}", recv_buf);
+
                 if n < msg_len as usize {
                     return Err(Error::new(ErrorKind::InvalidData, "Did not read enough bytes"));
                 }
@@ -112,7 +114,7 @@ impl Connection {
             return Ok(Some(n));
         }
 
-        let mut buf = [0u8; 8];
+        let mut buf = [0u8; 12];
 
         let bytes = match self.sock.try_read(&mut buf) {
             Ok(None) => {
@@ -129,7 +131,18 @@ impl Connection {
             return Err(Error::new(ErrorKind::InvalidData, "Invalid message length"));
         }
 
-        let msg_len = BigEndian::read_u64(buf.as_ref());
+        debug!("Received: {:?}", buf);
+
+        let command = LittleEndian::read_i32(buf[0..4].as_ref());
+        debug!("Command number is {}", command);
+
+        let name_len = LittleEndian::read_i32(buf[4..8].as_ref());
+        debug!("Name length is {}", name_len);
+
+        let msg_len = LittleEndian::read_i32(buf[8..12].as_ref());
+        debug!("message length is {}", msg_len);
+
+        let msg_len = (12 + name_len + msg_len) as u64;
         Ok(Some(msg_len))
     }
 

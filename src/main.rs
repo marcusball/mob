@@ -21,7 +21,7 @@ fn main() {
     // figure out why something is not working correctly.
     env_logger::init().ok().expect("Failed to init logger");
 
-    let addr = "127.0.0.1:8000".parse::<SocketAddr>()
+    let addr = "127.0.0.1:3456".parse::<SocketAddr>()
         .ok().expect("Failed to parse host:port string");
     let sock = TcpListener::bind(&addr).ok().expect("Failed to bind address");
 

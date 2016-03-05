@@ -10,7 +10,8 @@ use mio::tcp::*;
 
 use server::Server;
 
-enum MessageType{
+#[derive(Clone)]
+pub enum MessageType{
     Login { name_len: u32 },
     Logout,
     Message { name_len: u32, msg_len: u32 },
@@ -28,14 +29,70 @@ impl MessageHeader{
     }
 }
 
-struct Message{
-    username: String,
-    message: String
+#[derive(Clone)]
+pub struct Message{
+    pub username: String,
+    msg_type: MessageType,
+    text: Option<String>
 }
 
 impl Message{
-    fn new(name: String, msg: String) -> Message{
-        Message{ username: name, message: msg }
+    pub fn new(name: String, msg_type: MessageType, message: Option<String>) -> Message{
+        Message{ username: name, msg_type: msg_type, text: message }
+    }
+
+    pub fn get_message(&self) -> String{
+        match self.msg_type{
+            MessageType::Login{name_len:_} => {
+                let prefix = "<<<";
+                let suffix = " has joined the room>>>";
+
+                let mut message = String::with_capacity(prefix.len() + suffix.len() + self.username.len());
+                message.push_str(prefix);
+                message.push_str(self.username.as_str());
+                message.push_str(suffix);
+                return message.clone();
+            },
+            MessageType::Logout => {
+                let prefix = "<<<";
+                let suffix = " has left the room>>>";
+
+                let mut message = String::with_capacity(prefix.len() + suffix.len() + self.username.len());
+                message.push_str(prefix);
+                message.push_str(self.username.as_str());
+                message.push_str(suffix);
+                return message.clone();
+            },
+            MessageType::Message{name_len: _, msg_len: len} => {
+                //let separator = ": ";
+
+                let mut message = String::with_capacity(len as usize);
+                // message.push_str(self.username.as_str());
+                // message.push_str(separator);
+                let msg_text = self.text.clone().unwrap();
+                message.push_str(msg_text.as_str().clone());
+                return message.clone();
+            },
+            MessageType::List => {
+                let message = self.text.clone().unwrap_or_else(|| String::new());
+                return message.clone();
+            }
+        }
+    }
+
+    pub fn get_send_message(&self) -> String{
+        let msg_text = self.get_message();
+        let mut msg_to_send = String::with_capacity(self.username.len() as usize + msg_text.len() as usize);
+        msg_to_send.push_str(self.username.as_str());
+        msg_to_send.push_str(msg_text.as_str());
+        return msg_to_send;
+    }
+
+    pub fn is_list(&self) -> bool{
+        match self.msg_type{
+            MessageType::List => true,
+            _ => false
+        }
     }
 }
 /// A stateful wrapper around a non-blocking stream. This connection is not
@@ -52,7 +109,7 @@ pub struct Connection {
     interest: EventSet,
 
     // messages waiting to be sent out
-    send_queue: Vec<Rc<Vec<u8>>>,
+    send_queue: Vec<Rc<Message>>,
 
     // track whether a connection needs to be (re)registered
     is_idle: bool,
@@ -93,14 +150,14 @@ impl Connection {
     ///
     /// The recieve buffer is sent back to `Server` so the message can be broadcast to all
     /// listening connections.
-    pub fn readable(&mut self) -> io::Result<Option<Vec<u8>>> {
+    pub fn readable(&mut self) -> io::Result<Option<Message>> {
 
         // let msg_len = match try!(self.read_message_length()) {
         //     None => { return Ok(None); },
         //     Some(n) => n,
         // };
 
-        let message_info = match try!(self.read_message_info()){
+        let message_info: MessageHeader = match try!(self.read_message_info()){
             None => { return Ok(None); },
             Some(n) => n,
         };
@@ -150,29 +207,37 @@ impl Connection {
 
                 self.read_continuation = None;
 
-                if let Some(MessageType::Login{ name_len }) = message_info.message_data{
-                    //let message_text = recv_buf.drain(name_len as usize..).collect();
-                    recv_buf.drain(name_len as usize..);
-                    {
-                        let ref username = recv_buf;
-                        self.username = String::from_utf8(username.clone()).unwrap();
+                {
+                    match message_info.message_data{
+                        Some(MessageType::Login{ name_len }) => {
+                            recv_buf.drain(name_len as usize..);
+                            {
+                                let ref username = recv_buf;
+                                self.username = String::from_utf8(username.clone()).unwrap();
+                            }
+                            Ok(Some(Message::new(self.username.clone(), MessageType::Login{name_len: self.username.len() as u32}, None)))
+                        },
+                        Some(MessageType::Logout) => {
+                            Ok(Some(Message::new(self.username.clone(), MessageType::Logout, None)))
+                        },
+                        Some(MessageType::Message{ name_len, msg_len }) => {
+                            let message_text: Vec<u8> = recv_buf.drain(name_len as usize..).collect();
+                            {
+                                let ref username = recv_buf;
+                                self.username = String::from_utf8(username.clone()).unwrap();
+                            }
+                            Ok(Some(Message::new(self.username.clone(), MessageType::Message{name_len: self.username.len() as u32, msg_len: message_text.len() as u32}, Some(String::from_utf8(message_text).unwrap()))))
+                        },
+                        Some(MessageType::List) => {
+                            Ok(Some(Message::new(self.username.clone(), MessageType::List, None)))
+                        },
+                        None => {Ok(None)}
                     }
-                    println!("Received login from {}", self.username);
-                }
-                else if let Some(MessageType::Message{ name_len, msg_len }) = message_info.message_data{
-                    let message_text = recv_buf.drain(name_len as usize..).collect();
-                    //recv_buf.drain(name_len as usize..);
-                    {
-                        let ref username = recv_buf;
-                        self.username = String::from_utf8(username.clone()).unwrap();
-                    }
-                    let message = Message::new(self.username.clone(), String::from_utf8(message_text).unwrap());
-                    println!("{}: {}", message.username, message.message);
                 }
                 //let message = Message::new(self.username.clone(), String::from_utf8(message_text).unwrap());
                 //println!("{}: {}", message.username, message.message);
 
-                Ok(Some(recv_buf))
+                //Ok(Some(recv_buf))
             },
             Err(e) => {
                 error!("Failed to read buffer for token {:?}, error: {}", self.token, e);
@@ -247,7 +312,7 @@ impl Connection {
             }
         };
 
-        if bytes < 8 {
+        if bytes < 12 {
             warn!("Found message length of {} bytes", bytes);
             return Err(Error::new(ErrorKind::InvalidData, "Invalid message length"));
         }
@@ -277,28 +342,50 @@ impl Connection {
 
         try!(self.send_queue.pop()
             .ok_or(Error::new(ErrorKind::Other, "Could not pop send queue"))
-            .and_then(|buf| {
-                match self.write_message_length(&buf) {
-                    Ok(None) => {
-                        // put message back into the queue so we can try again
-                        self.send_queue.push(buf);
-                        return Ok(());
-                    },
-                    Ok(Some(())) => {
-                        ()
-                    },
-                    Err(e) => {
-                        error!("Failed to send buffer for {:?}, error: {}", self.token, e);
-                        return Err(e);
-                    }
-                }
+            .and_then(|msg| {
+                // match self.write_message_length(&msg) {
+                //     Ok(None) => {
+                //         // put message back into the queue so we can try again
+                //         self.send_queue.push(msg);
+                //         return Ok(());
+                //     },
+                //     Ok(Some(())) => {
+                //         ()
+                //     },
+                //     Err(e) => {
+                //         error!("Failed to send buffer for {:?}, error: {}", self.token, e);
+                //         return Err(e);
+                //     }
+                // }
 
-                match self.sock.try_write(&*buf) {
+                let msg_type = match(msg.msg_type){
+                    MessageType::Login{ name_len: _} => 0,
+                    MessageType::Logout => 1,
+                    MessageType::Message{ name_len: _, msg_len: _} => 2,
+                    MessageType::List => 3
+                };
+
+                let buf = msg.get_message();
+                let len = buf.as_bytes().len();
+                let mut send_buf = [0u8; 12];
+                LittleEndian::write_i32(&mut send_buf[0..4], msg_type as i32);
+                LittleEndian::write_i32(&mut send_buf[4..8], msg.username.len() as i32);
+                LittleEndian::write_i32(&mut send_buf[8..12], len as i32);
+
+                let msg_bytes = msg.get_send_message();
+                let mut bytes_to_send : Vec<u8> = Vec::with_capacity(msg_bytes.len() + send_buf.len());
+                bytes_to_send.extend_from_slice(send_buf.as_ref());
+                bytes_to_send.extend_from_slice(msg_bytes.as_bytes());
+
+                let send_bytes = bytes_to_send.as_slice();
+
+
+                match self.sock.try_write(&*send_bytes) {
                     Ok(None) => {
                         debug!("client flushing buf; WouldBlock");
 
                         // put message back into the queue so we can try again
-                        self.send_queue.push(buf);
+                        self.send_queue.push(msg);
                         self.write_continuation = true;
                         Ok(())
                     },
@@ -322,14 +409,24 @@ impl Connection {
         Ok(())
     }
 
-    fn write_message_length(&mut self, buf: &Rc<Vec<u8>>) -> io::Result<Option<()>> {
+    fn write_message_length(&mut self, msg: &Rc<Message>) -> io::Result<Option<()>> {
         if self.write_continuation {
             return Ok(Some(()));
         }
 
-        let len = buf.len();
-        let mut send_buf = [0u8; 8];
-        BigEndian::write_u64(&mut send_buf, len as u64);
+        let msg_type = match(msg.msg_type){
+            MessageType::Login{ name_len: _} => 0,
+            MessageType::Logout => 1,
+            MessageType::Message{ name_len: _, msg_len: _} => 2,
+            MessageType::List => 3
+        };
+
+        let buf = msg.get_message();
+        let len = buf.as_bytes().len();
+        let mut send_buf = [0u8; 12];
+        LittleEndian::write_i32(&mut send_buf[0..4], msg_type as i32);
+        LittleEndian::write_i32(&mut send_buf[4..8], msg.username.len() as i32);
+        LittleEndian::write_i32(&mut send_buf[8..12], len as i32);
 
         match self.sock.try_write(&send_buf) {
             Ok(None) => {
@@ -353,7 +450,7 @@ impl Connection {
     /// This will cause the connection to register interests in write events with the event loop.
     /// The connection can still safely have an interest in read events. The read and write buffers
     /// operate independently of each other.
-    pub fn send_message(&mut self, message: Rc<Vec<u8>>) -> io::Result<()> {
+    pub fn send_message(&mut self, message: Rc<Message>) -> io::Result<()> {
         trace!("connection send_message; token={:?}", self.token);
 
         self.send_queue.push(message);

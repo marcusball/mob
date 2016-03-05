@@ -6,6 +6,7 @@ use mio::tcp::*;
 use mio::util::Slab;
 
 use connection::Connection;
+use connection::{Message, MessageType};
 
 pub struct Server {
     // main socket for our server
@@ -219,15 +220,41 @@ impl Server {
         debug!("server conn readable; token={:?}", token);
 
         while let Some(message) = try!(self.find_connection_by_token(token).readable()) {
+            let message_text = message.get_message();
+            println!("{}: {}", message.username, message_text);
 
-            let rc_message = Rc::new(message);
-            // Queue up a write for all connected clients.
-            for c in self.conns.iter_mut() {
-                c.send_message(rc_message.clone())
-                    .unwrap_or_else(|e| {
-                        error!("Failed to queue message for {:?}: {:?}", c.token, e);
-                        c.mark_reset();
-                    });
+            if !message.is_list(){
+
+                let rc_message = Rc::new(message);
+                // Queue up a write for all connected clients.
+                println!("There are {} active connections", self.conns.count());
+                for c in self.conns.iter_mut() {
+                    println!("Dispatching message to {}", c.username);
+                    c.send_message(rc_message.clone())
+                        .unwrap_or_else(|e| {
+                            error!("Failed to queue message for {:?}: {:?}", c.token, e);
+                            c.mark_reset();
+                        });
+                }
+            }
+            else{
+                let mut users : Vec<String> = Vec::new();
+                for c in self.conns.iter(){
+                    let username = c.username.clone();
+                    users.push(username);
+                }
+                let userlist = users.join("*");
+
+                println!("User list: {}", userlist);
+
+                let list_msg = Message::new(message.username, MessageType::List, Some(userlist));
+
+                let rc_list_msg = Rc::new(list_msg);
+                let reqc = self.find_connection_by_token(token);
+                reqc.send_message(rc_list_msg).unwrap_or_else(|e| {
+                    error!("Failed to queue message for {:?}: {:?}", reqc.token, e);
+                    reqc.mark_reset();
+                });
             }
         }
 

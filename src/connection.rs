@@ -17,7 +17,27 @@ enum MessageType{
     List
 }
 
+struct MessageHeader{
+    message_length: u64,
+    message_data: Option<MessageType>
+}
 
+impl MessageHeader{
+    fn new(length: u64, message: Option<MessageType>) -> MessageHeader{
+        MessageHeader{ message_length: length, message_data: message }
+    }
+}
+
+struct Message{
+    username: String,
+    message: String
+}
+
+impl Message{
+    fn new(name: String, msg: String) -> Message{
+        Message{ username: name, message: msg }
+    }
+}
 /// A stateful wrapper around a non-blocking stream. This connection is not
 /// the SERVER connection. This connection represents the client connections
 /// _accepted_ by the SERVER connection.
@@ -75,15 +95,33 @@ impl Connection {
     /// listening connections.
     pub fn readable(&mut self) -> io::Result<Option<Vec<u8>>> {
 
-        let msg_len = match try!(self.read_message_length()) {
+        // let msg_len = match try!(self.read_message_length()) {
+        //     None => { return Ok(None); },
+        //     Some(n) => n,
+        // };
+
+        let message_info = match try!(self.read_message_info()){
             None => { return Ok(None); },
             Some(n) => n,
         };
 
-        if msg_len == 0 {
-            debug!("message is zero bytes; token={:?}", self.token);
-            return Ok(None);
-        }
+        let msg_len = match message_info.message_data {
+            Some(MessageType::Login{ name_len })  => { name_len },
+            Some(MessageType::Logout) => { 0 },
+            Some(MessageType::Message{ name_len, msg_len: mesg_len }) => { name_len + mesg_len },
+            Some(MessageType::List) => { 0 },
+            None => {
+                error!("Received invalid message type)!");
+                //@TODO ************
+                // PROBABLY NOT ACTUALLY AN ERROR CASE DONT RETURN HERE
+                return Err(Error::new(ErrorKind::InvalidData, "Invalid message type"));
+            }
+        };
+
+        // if msg_len == 0 {
+        //     debug!("message is zero bytes; token={:?}", self.token);
+        //     return Ok(None);
+        // }
 
         debug!("Expected message length: {}", msg_len);
         let mut recv_buf : Vec<u8> = Vec::with_capacity(msg_len as usize);
@@ -112,6 +150,28 @@ impl Connection {
 
                 self.read_continuation = None;
 
+                if let Some(MessageType::Login{ name_len }) = message_info.message_data{
+                    //let message_text = recv_buf.drain(name_len as usize..).collect();
+                    recv_buf.drain(name_len as usize..);
+                    {
+                        let ref username = recv_buf;
+                        self.username = String::from_utf8(username.clone()).unwrap();
+                    }
+                    println!("Received login from {}", self.username);
+                }
+                else if let Some(MessageType::Message{ name_len, msg_len }) = message_info.message_data{
+                    let message_text = recv_buf.drain(name_len as usize..).collect();
+                    //recv_buf.drain(name_len as usize..);
+                    {
+                        let ref username = recv_buf;
+                        self.username = String::from_utf8(username.clone()).unwrap();
+                    }
+                    let message = Message::new(self.username.clone(), String::from_utf8(message_text).unwrap());
+                    println!("{}: {}", message.username, message.message);
+                }
+                //let message = Message::new(self.username.clone(), String::from_utf8(message_text).unwrap());
+                //println!("{}: {}", message.username, message.message);
+
                 Ok(Some(recv_buf))
             },
             Err(e) => {
@@ -121,7 +181,11 @@ impl Connection {
         }
     }
 
-    fn read_message_info(&mut self) -> io::Result<Option<MessageType>>{
+    fn read_message_info(&mut self) -> io::Result<Option<MessageHeader>>{
+        if let Some(n) = self.read_continuation {
+            return Ok(Some(MessageHeader{ message_length: n, message_data: None}));
+        }
+
         let mut buf = [0u8; 12];
 
         let bytes = match self.sock.try_read(&mut buf){
@@ -150,18 +214,20 @@ impl Connection {
         let msg_len = LittleEndian::read_u32(buf[8..12].as_ref());
         debug!("message length is {}", msg_len);
 
-        //let msg_len = (12 + name_len + msg_len) as u64;
+        let data_len = (name_len + msg_len) as u64;
 
-        match command{
-            0 => { return Ok(Some(MessageType::Login{ name_len: name_len })); },
-            1 => { return Ok(Some(MessageType::Logout)); },
-            2 => { return Ok(Some(MessageType::Message{ name_len: name_len, msg_len: msg_len })); },
-            3 => { return Ok(Some(MessageType::List)); },
+        let message: MessageType = match command{
+            0 => { MessageType::Login{ name_len: name_len } },
+            1 => { MessageType::Logout },
+            2 => { MessageType::Message{ name_len: name_len, msg_len: msg_len } },
+            3 => { MessageType::List },
             n => {
                 warn!("Received invalid message type, {}!", n);
                 return Err(Error::new(ErrorKind::InvalidData, "Invalid message type received"));
             }
         };
+
+        return Ok(Some(MessageHeader::new(data_len, Some(message))));
     }
 
     fn read_message_length(&mut self) -> io::Result<Option<u64>> {

@@ -39,6 +39,12 @@ impl Handler for Server {
                         reset_tokens.push(c.token);
                     });
             }
+
+            if c.has_write_queued(){
+                c.reregister(event_loop).unwrap_or_else(|e| {
+                    warn!("Reregister failed {:?}", e);
+                });
+            }
         }
 
         for token in reset_tokens {

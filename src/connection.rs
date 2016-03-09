@@ -339,6 +339,9 @@ impl Connection {
     /// TODO: Figure out if sending more than one message is optimal. Maybe we should be trying to
     /// flush until the kernel sends back EAGAIN?
     pub fn writable(&mut self) -> io::Result<()> {
+        if self.send_queue.is_empty() {
+            return Ok(());
+        }
 
         try!(self.send_queue.pop()
             .ok_or(Error::new(ErrorKind::Other, "Could not pop send queue"))
@@ -533,5 +536,9 @@ impl Connection {
     #[inline]
     pub fn is_idle(&self) -> bool {
         self.is_idle
+    }
+
+    pub fn has_write_queued(&self) -> bool{
+        self.interest.is_writable()
     }
 }

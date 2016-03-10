@@ -38,9 +38,7 @@ impl Handler for Server {
                         c.mark_reset();
                         reset_tokens.push(c.token);
                     });
-            }
-
-            if c.has_write_queued(){
+            } else if c.has_write_queued(){
                 c.reregister(event_loop).unwrap_or_else(|e| {
                     warn!("Reregister failed {:?}", e);
                 });
@@ -48,11 +46,14 @@ impl Handler for Server {
         }
 
         for token in reset_tokens {
+            let rm_user = self.find_connection_by_token(token).username.clone();
             match self.conns.remove(token) {
                 Some(_c) => {
+                    println!("Removed disconnected user {}", rm_user);
                     debug!("reset connection; token={:?}", token);
                 }
                 None => {
+                    println!("Failed to remove disconnected user {}", rm_user);
                     warn!("Unable to remove connection for {:?}", token);
                 }
             }
@@ -227,15 +228,21 @@ impl Server {
 
         while let Some(message) = try!(self.find_connection_by_token(token).readable()) {
             let message_text = message.get_message();
-            println!("{}: {}", message.username, message_text);
+            println!("{}: {}", &message.username, message_text);
 
             if !message.is_list(){
 
                 let rc_message = Rc::new(message);
                 // Queue up a write for all connected clients.
-                println!("There are {} active connections", self.conns.count());
                 for c in self.conns.iter_mut() {
-                    println!("Dispatching message to {}", c.username);
+                    //println!("Dispatching message to {}", c.username);
+                    if let MessageType::Login{ name_len: _} = rc_message.msg_type{
+                       if c.username == rc_message.username {
+                           println!("Won't send message to originator of login event");
+                           continue;
+                       }
+                    }
+
                     c.send_message(rc_message.clone())
                         .unwrap_or_else(|e| {
                             error!("Failed to queue message for {:?}: {:?}", c.token, e);

@@ -32,7 +32,7 @@ impl MessageHeader{
 #[derive(Clone)]
 pub struct Message{
     pub username: String,
-    msg_type: MessageType,
+    pub msg_type: MessageType,
     text: Option<String>
 }
 
@@ -64,11 +64,11 @@ impl Message{
                 return message.clone();
             },
             MessageType::Message{name_len: _, msg_len: len} => {
-                //let separator = ": ";
+                let separator = ": ";
 
                 let mut message = String::with_capacity(len as usize);
-                // message.push_str(self.username.as_str());
-                // message.push_str(separator);
+                message.push_str(self.username.as_str());
+                message.push_str(separator);
                 let msg_text = self.text.clone().unwrap();
                 message.push_str(msg_text.as_str().clone());
                 return message.clone();
@@ -263,7 +263,7 @@ impl Connection {
             }
         };
 
-        if bytes < 8{
+        if bytes < 5{
             warn!("Found message length of {} bytes", bytes);
             return Err(Error::new(ErrorKind::InvalidData, "Invalid message length"));
         }
